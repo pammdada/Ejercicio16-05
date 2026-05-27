@@ -34,9 +34,12 @@ private fun voucherStrategy(): AIAgentGraphStrategy<VoucherInput, VoucherResult>
             llm.writeSession {
                 appendPrompt {
                     user {
-                        text("¿Es una iamgen? Responde ÚNICAMENTE con un JSON en este formato exacto: {\"isVoucher\": true/false, \"confidence\": 0.0-1.0}")
+                        //validar las transacciones. usar ejemplos.
+                        text("""Analiza la imagen adjunta y determina si es un comprobante de pago, boleta, factura, ticket o voucher. Responde ÚNICAMENTE con un JSON en este formato exacto (sin markdown, sin bloques de código, sin texto adicional): {"isVoucher": true/false, "confidence": 0.0-1.0}""")
                         image(
                             AttachmentSource.Image(
+                                //format y mimetype a partir de la imagen en base64
+                                //colocar un ejemplo en el prompt, cargar voucher en local, revisar documentación prompts
                                 content = AttachmentContent.Binary.Base64(base64Payload),
                                 format = "png",
                                 mimeType = "image/png"
@@ -44,15 +47,20 @@ private fun voucherStrategy(): AIAgentGraphStrategy<VoucherInput, VoucherResult>
                         )
                     }
                 }
+
+                //devolver solo TRUE/FALSE no JSON
                 val response = requestLLMWithoutTools()
+                val rawText = response.parts.filterIsInstance<MessagePart.Text>().joinToString("\n") { it.text }
+                println("[DEBUG classifyNode] Raw LLM response: $rawText")
                 try {
-                    val text = response.parts.filterIsInstance<MessagePart.Text>().joinToString("\n") { it.text }
-                    val cleanJson = text.substringAfter("```json").substringAfter("```").substringBefore("```").trim().ifBlank { text.trim() }
+                    val jsonMatch = Regex("\\{[\\s\\S]*?\\}").find(rawText)
+                    val cleanJson = jsonMatch?.value?.trim() ?: rawText.trim()
                     val obj = Json.parseToJsonElement(cleanJson).jsonObject
                     val isV = obj["isVoucher"]?.jsonPrimitive?.boolean ?: false
                     val conf = obj["confidence"]?.jsonPrimitive?.float ?: 0.0f
                     ClassificationResult(isV, conf, input)
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    println("[DEBUG classifyNode] JSON parse failed: ${e.message}")
                     ClassificationResult(false, 0.0f, input)
                 }
             }
@@ -175,6 +183,85 @@ fun Application.configureRouting() {
                         GoogleModels.Gemini2_5Flash,
                         request
                     )
+                    call.respond(HttpStatusCode.OK, result)
+                } catch (e: Exception) {
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        VoucherResult(
+                            isVoucher = false,
+                            message = "Error al procesar la imagen: ${e.message}"
+                        )
+                    )
+                }
+            }
+
+            post("/extract-voucher-direct") {
+                try {
+                    val request = call.receive<VoucherInput>()
+                    val base64Payload = request.imageBase64.substringAfter(",")
+
+                    val response = llm().execute(
+                        prompt("extract-voucher-direct") {
+                            user {
+                                text(
+                                    """
+                                    Extrae los siguientes datos del comprobante de pago, boleta, factura o voucher de la imagen adjunta. Responde ÚNICAMENTE en JSON, sin marcas de markdown ni bloques de código, solo JSON puro:
+                                    {
+                                      "descripcion": "Descripcion breve del tipo de comprobante (max. 6 palabras, ej: Boleta de venta de combustible)",
+                                      "monto": "Monto total del comprobante",
+                                      "numeroTransaccion": "Numero de transaccion o comprobante",
+                                      "moneda": "Moneda (PEN, USD, etc.)",
+                                      "fecha": "Fecha del comprobante",
+                                      "metodoPago": "Metodo de pago",
+                                      "datosPersonales": {
+                                        "nombre": "Nombre completo del cliente o consumidor",
+                                        "dni": "DNI del cliente (si aparece)",
+                                        "ruc": "RUC del cliente (si aparece, generalmente en facturas)",
+                                        "email": "Correo electronico (si aparece)",
+                                        "razonSocial": "Razon social (si aparece, generalmente en facturas)"
+                                      }
+                                    }
+                                """.trimIndent()
+                                )
+                                image(
+                                    AttachmentSource.Image(
+                                        content = AttachmentContent.Binary.Base64(base64Payload),
+                                        format = "png",
+                                        mimeType = "image/png"
+                                    )
+                                )
+                            }
+                        },
+                        GoogleModels.Gemini2_0FlashLite001
+                    )
+
+                    val rawText = response.textContent()
+                    println("[DEBUG extract-voucher-direct] Raw LLM response: $rawText")
+
+                    val data = try {
+                        val jsonMatch = Regex("\\{[\\s\\S]*?\\}").find(rawText)
+                        val cleanJson = jsonMatch?.value?.trim() ?: rawText.trim()
+                        json.decodeFromString<VoucherData>(cleanJson)
+                    } catch (e: Exception) {
+                        println("[DEBUG extract-voucher-direct] JSON parse failed: ${e.message}")
+                        VoucherData()
+                    }
+
+                    val isVoucher = !data.monto.isNullOrBlank() && !data.descripcion.isNullOrBlank()
+                    val result = if (isVoucher) {
+                        VoucherResult(
+                            isVoucher = true,
+                            confidence = 0.9f,
+                            data = data
+                        )
+                    } else {
+                        VoucherResult(
+                            isVoucher = false,
+                            confidence = 0.0f,
+                            message = "La imagen no corresponde a un comprobante de pago, boleta o factura."
+                        )
+                    }
+
                     call.respond(HttpStatusCode.OK, result)
                 } catch (e: Exception) {
                     call.respond(

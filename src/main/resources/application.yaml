@@ -7,5 +7,5 @@ ktor:
       - com.RoutingKt.configureRouting
 koog:
   google:
-    apikey: "AIzaSyBsPFR7OvYGXGLuJThzSYKDKMIMkk08Rcc"
+    apikey: "AIzaSyCXGGQt52MBk3NLup6JxsSeGbiD4-ATbho"
     baseUrl: https://generativelanguage.googleapis.com
