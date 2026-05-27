@@ -1,11 +1,11 @@
 ktor:
   deployment:
-    host: 0.0.0.0
+    host: "0.0.0.0"
     port: 8080
   application:
     modules:
       - com.RoutingKt.configureRouting
 koog:
   google:
-    apikey: "AIzaSyBBud7MjR0Vdl4bKqyzB_Ao2X3PWidspTE"
+    apikey: "AIzaSyBsPFR7OvYGXGLuJThzSYKDKMIMkk08Rcc"
     baseUrl: https://generativelanguage.googleapis.com
