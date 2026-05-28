@@ -45,9 +45,9 @@ private fun voucherStrategy(): AIAgentGraphStrategy<VoucherInput, VoucherResult>
             val base64Payload = input.imageBase64.substringAfter(",")
             llm.writeSession {
                 appendPrompt {
+                    system("""Eres un clasificador de imágenes contables. Tu única tarea es determinar si la imagen es un comprobante de pago, boleta, factura, ticket o voucher. Responde EXCLUSIVAMENTE con la palabra true o false. No incluyas ningún otro texto, explicación o formato.""")
                     user {
                         //validar las transacciones. usar ejemplos.
-                        text("""¿Es esta imagen un comprobante de pago, boleta, factura, ticket o voucher? Responde ÚNICAMENTE con la palabra true o false.""")
                         image(
                             AttachmentSource.Image(
                                 //format y mimetype a partir de la imagen en base64
@@ -77,26 +77,43 @@ private fun voucherStrategy(): AIAgentGraphStrategy<VoucherInput, VoucherResult>
                 appendPrompt {
                     //https://docs.koog.ai/prompts/prompt-creation/#basic-structure
                     //usar user, system y assistent para
+                    system("""Eres un asistente experto en extracción de datos contables de comprobantes de pago (boletas, facturas, recibos). Analiza la imagen o texto provisto y genera un JSON limpio bajo las siguientes reglas:
+
+REGLAS DE EXTRACCIÓN Y NORMALIZACIÓN:
+1. Clasificación por Comprobante:
+   - Si es FACTURA, busca obligatoriamente RUC y RAZÓN SOCIAL del cliente.
+   - Si es BOLETA DE VENTA, busca DNI y NOMBRE del cliente.
+2. Método de Pago: Clasifícalo estrictamente en uno de estos valores: [EFECTIVO, TARJETA_CREDITO, TARJETA_DEBITO, TRANSFERENCIA, YAPE, PLIN, OTRO].
+3. Fecha y Hora (Separados):
+   - "fecha": Extrae solo la fecha y normalízala al formato "YYYY-MM-DD" (ej: "2026-05-27").
+   - "hora": Extrae solo la hora en formato de 24 horas "HH:mm" (ej: "14:35"). Si el comprobante no tiene hora visible, asígnale null.
+4. Formatos base:
+   - "monto": Extrae solo el valor numérico como texto (ej: "45.00"), sin símbolos de moneda.
+   - "moneda": Usa el estándar ISO de 3 letras (PEN, USD).
+5. Valores Ausentes: Si un campo no existe en el comprobante, asígnale estrictamente el valor null (sin comillas). No inventes datos.
+
+INSTRUCCIÓN DE SALIDA CRÍTICA:
+Responde EXCLUSIVAMENTE con el objeto JSON estructurado. Está prohibido incluir bloques de código Markdown (```json ... ```), texto introductorio o explicaciones. Devuelve solo el texto plano del JSON que empiece con { y termine con }.
+
+ESTRUCTURA DEL JSON:
+{
+  "descripcion": "Descripción breve (max 6 palabras)",
+  "monto": "Monto numérico como String",
+  "numeroTransaccion": "Número de comprobante o ID de operación",
+  "moneda": "PEN o USD",
+  "fecha": "YYYY-MM-DD o null",
+  "hora": "HH:mm o null",
+  "metodoPago": "Método estandarizado",
+  "datosPersonales": {
+    "nombre": "Nombre completo o null",
+    "dni": "DNI de 8 dígitos o null",
+    "ruc": "RUC de 11 dígitos o null",
+    "email": "Correo electrónico o null",
+    "razonSocial": "Razón social o null"
+  }
+}""")
                     user {
                         //usar timestamp, fecha y hora separadas, definir metodo de pago, tipo de comprobante
-                        text("""
-                            Extrae los siguientes datos del comprobante y responde ÚNICAMENTE en JSON, sin marcas de markdown ni bloques de código, solo JSON puro:
-                            {
-                              "descripcion": "Descripcion breve del tipo de comprobante (max. 6 palabras, ej: Boleta de venta de combustible)",
-                              "monto": "Monto total del comprobante",
-                              "numeroTransaccion": "Numero de transaccion o comprobante",
-                              "moneda": "Moneda (PEN, USD, etc.)",
-                              "fecha": "Fecha del comprobante",
-                              "metodoPago": "Metodo de pago",
-                              "datosPersonales": {
-                                "nombre": "Nombre completo del cliente o consumidor",
-                                "dni": "DNI del cliente (si aparece)",
-                                "ruc": "RUC del cliente (si aparece, generalmente en facturas)",
-                                "email": "Correo electronico (si aparece)",
-                                "razonSocial": "Razon social (si aparece, generalmente en facturas)"
-                              }
-                            }
-                        """.trimIndent())
                         image(
                             AttachmentSource.Image(
                                 content = AttachmentContent.Binary.Base64(base64Payload),
