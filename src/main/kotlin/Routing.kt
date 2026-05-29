@@ -17,6 +17,10 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.json.*
+import ai.koog.agents.core.agent.AIAgent
+import ai.koog.agents.core.tools.ToolRegistry
+import ai.koog.prompt.executor.clients.google.GoogleLLMClient
+import ai.koog.prompt.executor.llms.MultiLLMPromptExecutor
 
 private data class ClassificationResult(
     val isVoucher: Boolean,
@@ -90,7 +94,8 @@ REGLAS DE EXTRACCIÓN Y NORMALIZACIÓN:
 4. Formatos base:
    - "monto": Extrae solo el valor numérico como texto (ej: "45.00"), sin símbolos de moneda.
    - "moneda": Usa el estándar ISO de 3 letras (PEN, USD).
-5. Valores Ausentes: Si un campo no existe en el comprobante, asígnale estrictamente el valor null (sin comillas). No inventes datos.
+5. Entidad Emisora: Identifica la entidad financiera o banco que emitió el comprobante. Valores esperados: [BCP, BBVA, INTERBANK, YAPE, PLIN, SCOTIABANK, BANCO_DE_LA_NACION, OTRO, null]. Si no es claro, usa null.
+6. Valores Ausentes: Si un campo no existe en el comprobante, asígnale estrictamente el valor null (sin comillas). No inventes datos.
 
 INSTRUCCIÓN DE SALIDA CRÍTICA:
 Responde EXCLUSIVAMENTE con el objeto JSON estructurado. Está prohibido incluir bloques de código Markdown (```json ... ```), texto introductorio o explicaciones. Devuelve solo el texto plano del JSON que empiece con { y termine con }.
@@ -104,6 +109,7 @@ ESTRUCTURA DEL JSON:
   "fecha": "YYYY-MM-DD o null",
   "hora": "HH:mm o null",
   "metodoPago": "Método estandarizado",
+  "entidad": "Entidad emisora (BCP, BBVA, YAPE, etc.) o null",
   "datosPersonales": {
     "nombre": "Nombre completo o null",
     "dni": "DNI de 8 dígitos o null",
@@ -154,6 +160,11 @@ ESTRUCTURA DEL JSON:
     }
 }
 
+//usar la api de outlook/gmail. Agergar correo electrónico al JSON, tipo correo (gmail/outlook) ejecutar una herramienta
+//segun el tipo de correo y fitra segun hora, tipo.
+//devovler true or false
+
+
 fun Application.configureRouting() {
     install(ContentNegotiation) {
         json()
@@ -180,6 +191,60 @@ fun Application.configureRouting() {
                         VoucherResult(
                             isVoucher = false,
                             message = "Error al procesar la imagen: ${e.message}"
+                        )
+                    )
+                }
+            }
+
+            post("/verify-payment") {
+                try {
+                    val request = call.receive<PaymentVerificationRequest>()
+                    val apiKey = application.environment.config.property("koog.google.apikey").getString()
+
+                    val imapConfig = ImapConfig(
+                        host = application.environment.config.property("imap.host").getString(),
+                        port = application.environment.config.property("imap.port").getString().toInt(),
+                        username = application.environment.config.property("imap.username").getString(),
+                        password = application.environment.config.property("imap.password").getString(),
+                        searchDaysBack = application.environment.config.property("imap.searchDaysBack").getString().toInt(),
+                        searchDaysForward = application.environment.config.property("imap.searchDaysForward").getString().toInt()
+                    )
+                    val imapService = ImapMailService(imapConfig)
+                    val toolSet = ImapVerificationToolSet(imapService)
+
+                    val agent = AIAgent(
+                        promptExecutor = MultiLLMPromptExecutor(GoogleLLMClient(apiKey)),
+                        systemPrompt = """
+Eres un verificador de operaciones bancarias.
+Tienes una herramienta llamada verifyPaymentInEmail que busca en el correo electrónico (IMAP) si existe una operación con la fecha y número de operación proporcionados.
+
+INSTRUCCIONES ESTRICTAS:
+1. La herramienta verifyPaymentInEmail devolverá "true" si la operación existe, o "false" si no.
+2. Tu respuesta DEBE ser EXCLUSIVAMENTE la palabra "true" o "false".
+3. No añadas texto adicional, explicaciones, markdown, comillas ni nada más.
+4. No incluyas puntos, saltos de línea, ni espacios extra.
+""".trimIndent(),
+                        llmModel = GoogleModels.Gemini2_5Flash,
+                        toolRegistry = ToolRegistry {
+                            tools(toolSet)
+                        }
+                    )
+
+                    val resultText = agent.run("Verifica si existe una operación con fecha ${request.fecha} y número de operación ${request.numeroTransaccion}")
+                    val isVerified = resultText.trim().lowercase() == "true"
+                    call.respond(
+                        HttpStatusCode.OK,
+                        PaymentVerificationResult(
+                            verified = isVerified,
+                            message = if (isVerified) "Operación verificada en correo electrónico." else "Operación no encontrada en correo electrónico."
+                        )
+                    )
+                } catch (e: Exception) {
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        PaymentVerificationResult(
+                            verified = false,
+                            message = "Error en verificación IMAP: ${e.message}"
                         )
                     )
                 }

@@ -19,7 +19,9 @@ data class VoucherData(
 
     //hora
     val fecha: String? = null,
+    val hora: String? = null,
     val metodoPago: String? = null,
+    val entidad: String? = null,
     val datosPersonales: DatosPersonales? = null
 )
 

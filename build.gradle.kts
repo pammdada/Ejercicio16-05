@@ -33,6 +33,8 @@ dependencies {
     implementation(ktorLibs.server.contentNegotiation)
     implementation(ktorLibs.serialization.kotlinx.json)
 
+    implementation("org.eclipse.angus:angus-mail:2.0.3")
+
     testImplementation(kotlin("test"))
     testImplementation(ktorLibs.server.testHost)
 }
